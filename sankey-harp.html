@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sankey Harp</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f;
+    color: #e0e0e0;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+  }
+  canvas { display: block; cursor: crosshair; }
+
+  #start-overlay {
+    position: fixed; inset: 0;
+    background: rgba(10,10,15,0.92);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100; cursor: pointer;
+    backdrop-filter: blur(8px);
+    transition: opacity 0.8s ease;
+  }
+  #start-overlay.hidden { opacity: 0; pointer-events: none; }
+  #start-overlay h2 {
+    font-size: 22px; font-weight: 300; color: #fff;
+    letter-spacing: 0.05em; text-align: center;
+  }
+  #start-overlay p {
+    font-size: 13px; color: #666; text-align: center; margin-top: 10px; font-weight: 300;
+  }
+
+  #tooltip {
+    position: fixed; pointer-events: none;
+    background: rgba(18,18,28,0.95);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px; padding: 10px 14px;
+    font-size: 12px; color: #ccc;
+    opacity: 0; transition: opacity 0.15s ease;
+    z-index: 80; backdrop-filter: blur(10px);
+  }
+  #tooltip.visible { opacity: 1; }
+  #tooltip .cat { font-weight: 600; color: #fff; margin-bottom: 3px; }
+  #tooltip .detail { font-size: 11px; color: #888; }
+
+  #title {
+    position: fixed; top: 22px; left: 28px; z-index: 50;
+    font-size: 13px; font-weight: 400; color: #555; letter-spacing: 0.04em;
+  }
+  #audio-badge {
+    position: fixed; top: 22px; right: 28px; z-index: 50;
+    font-size: 10px; color: #444; letter-spacing: 0.08em;
+    display: flex; align-items: center; gap: 6px; text-transform: uppercase;
+  }
+  #audio-badge .dot {
+    width: 6px; height: 6px; border-radius: 50%; background: #333;
+    transition: background 0.4s, box-shadow 0.4s;
+  }
+  #audio-badge .dot.on { background: #4ecdc4; box-shadow: 0 0 8px #4ecdc488; }
+
+  #nav {
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 22px; z-index: 50;
+  }
+  #nav span {
+    font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: #444;
+  }
+  #nav span.on { color: #ccc; border-bottom: 1px solid #888; padding-bottom: 2px; }
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<div id="start-overlay">
+  <div>
+    <h2>Click to play</h2>
+    <p>Then sweep your mouse through the ribbons</p>
+  </div>
+</div>
+
+<div id="title">Trend Signals by Region</div>
+<div id="audio-badge"><div class="dot" id="dot"></div> Audio</div>
+<div id="tooltip"><div class="cat"></div><div class="detail"></div></div>
+<div id="nav">
+  <span>World</span>
+  <span class="on">Sankey</span>
+  <span>Geo</span>
+</div>
+
+<script>
+// ───── DATA ─────────────────────────────────────────────────
+const cats = [
+  { name: "AI",               color: "#e8913a" },
+  { name: "Climate",          color: "#3bbfa0" },
+  { name: "Digital Organics", color: "#5cb85c" },
+  { name: "Education",        color: "#d94f8e" },
+  { name: "Longevity",        color: "#9b6fc6" },
+  { name: "Older Athletes",   color: "#4a90d9" },
+  { name: "Post Human",       color: "#e05555" },
+  { name: "Skincare",         color: "#e8a0b8" },
+  { name: "Spaces",           color: "#d4c94a" },
+  { name: "Super Human",      color: "#6ec6e6" },
+  { name: "Women",            color: "#e87d5a" }
+];
+
+const regions = [
+  "North America","EMEA","Greater China","Japan","Korea","Latin America","India"
+];
+
+// [catIndex, regionIndex, value]
+const flows = [
+  [0,0,38],[0,1,30],[0,2,18],[0,3,10],[0,4,8],[0,5,6],[0,6,12],
+  [1,0,22],[1,1,28],[1,2,12],[1,3,8],[1,4,5],[1,5,10],[1,6,8],
+  [2,0,18],[2,1,15],[2,2,10],[2,3,12],[2,4,6],[2,5,5],[2,6,4],
+  [3,0,20],[3,1,18],[3,2,14],[3,3,8],[3,4,7],[3,5,12],[3,6,15],
+  [4,0,25],[4,1,20],[4,2,10],[4,3,15],[4,4,12],[4,5,5],[4,6,4],
+  [5,0,15],[5,1,12],[5,2,5],[5,3,10],[5,4,4],[5,5,6],[5,6,3],
+  [6,0,12],[6,1,10],[6,2,15],[6,3,8],[6,4,10],[6,5,4],[6,6,5],
+  [7,0,20],[7,1,16],[7,2,18],[7,3,14],[7,4,18],[7,5,6],[7,6,5],
+  [8,0,16],[8,1,14],[8,2,10],[8,3,10],[8,4,5],[8,5,8],[8,6,6],
+  [9,0,22],[9,1,15],[9,2,12],[9,3,10],[9,4,8],[9,5,4],[9,6,6],
+  [10,0,25],[10,1,22],[10,2,10],[10,3,8],[10,4,6],[10,5,12],[10,6,10]
+];
+
+// ───── CANVAS SETUP ─────────────────────────────────────────
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+let W, H;
+
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener("resize", () => { resize(); layout(); });
+
+// ───── LAYOUT (custom sankey) ───────────────────────────────
+const PAD = { top: 80, bottom: 80, left: 180, right: 180 };
+let ribbons = []; // our drawable ribbons
+
+function layout() {
+  ribbons = [];
+  const innerH = H - PAD.top - PAD.bottom;
+  const innerW = W - PAD.left - PAD.right;
+
+  // Compute totals per cat and per region
+  const catTotals = cats.map((_, ci) =>
+    flows.filter(f => f[0] === ci).reduce((s, f) => s + f[2], 0)
+  );
+  const regTotals = regions.map((_, ri) =>
+    flows.filter(f => f[1] === ri).reduce((s, f) => s + f[2], 0)
+  );
+
+  const totalAll = catTotals.reduce((a, b) => a + b, 0);
+  const nodePad = 10;
+
+  // Left node positions
+  const catTotalWithPad = totalAll + nodePad * (cats.length - 1);
+  const catScale = innerH / catTotalWithPad;
+  const catNodes = [];
+  let cy = PAD.top;
+  catTotals.forEach((t, i) => {
+    const h = t * catScale;
+    catNodes.push({ y: cy, h, centerY: cy + h / 2 });
+    cy += h + nodePad * catScale;
+  });
+
+  // Right node positions
+  const regTotalWithPad = totalAll + nodePad * (regions.length - 1);
+  const regScale = innerH / regTotalWithPad;
+  const regNodes = [];
+  let ry = PAD.top;
+  regTotals.forEach((t, i) => {
+    const h = t * regScale;
+    regNodes.push({ y: ry, h, centerY: ry + h / 2 });
+    ry += h + nodePad * regScale;
+  });
+
+  // Build ribbons — stack within each node
+  const catOffsets = catTotals.map(() => 0);
+  const regOffsets = regTotals.map(() => 0);
+
+  flows.forEach(([ci, ri, val]) => {
+    const catNode = catNodes[ci];
+    const regNode = regNodes[ri];
+
+    const srcH = (val / catTotals[ci]) * catNode.h;
+    const srcY = catNode.y + (catOffsets[ci] / catTotals[ci]) * catNode.h;
+
+    const tgtH = (val / regTotals[ri]) * regNode.h;
+    const tgtY = regNode.y + (regOffsets[ri] / regTotals[ri]) * regNode.h;
+
+    catOffsets[ci] += val;
+    regOffsets[ri] += val;
+
+    ribbons.push({
+      ci, ri, val,
+      x0: PAD.left, y0: srcY, h0: srcH,
+      x1: W - PAD.right, y1: tgtY, h1: tgtH,
+      color: cats[ci].color,
+      catName: cats[ci].name,
+      regName: regions[ri]
+    });
+  });
+
+  // Store node arrays for drawing labels
+  layout.catNodes = catNodes;
+  layout.regNodes = regNodes;
+}
+layout();
+
+// ───── HIT TESTING ──────────────────────────────────────────
+function ribbonPath(r, testY) {
+  // Returns top and bottom y at a given x using cubic bezier
+  // We'll sample at mouse x
+  return null; // handled inline below
+}
+
+function hitTest(mx, my) {
+  if (mx < PAD.left || mx > W - PAD.right) return null;
+  const t = (mx - PAD.left) / (W - PAD.left - PAD.right);
+  // Cubic ease for the S-curve
+  const ct = t * t * (3 - 2 * t);
+
+  for (let i = ribbons.length - 1; i >= 0; i--) {
+    const r = ribbons[i];
+    const topY = r.y0 + (r.y1 - r.y0) * ct;
+    const topH = r.h0 + (r.h1 - r.h0) * ct;
+    if (my >= topY && my <= topY + topH) return i;
+  }
+  return null;
+}
+
+// ───── DRAWING ──────────────────────────────────────────────
+let hoveredIdx = null;
+let glowAlpha = 0;
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function drawRibbon(r, alpha, glow) {
+  const x0 = r.x0, x1 = r.x1;
+  const cpx = (x0 + x1) / 2;
+
+  ctx.beginPath();
+  // Top edge
+  ctx.moveTo(x0, r.y0);
+  ctx.bezierCurveTo(cpx, r.y0, cpx, r.y1, x1, r.y1);
+  // Bottom edge
+  ctx.lineTo(x1, r.y1 + r.h1);
+  ctx.bezierCurveTo(cpx, r.y1 + r.h1, cpx, r.y0 + r.h0, x0, r.y0 + r.h0);
+  ctx.closePath();
+
+  const [cr, cg, cb] = hexToRgb(r.color);
+  ctx.fillStyle = `rgba(${cr},${cg},${cb},${alpha})`;
+  ctx.fill();
+
+  if (glow) {
+    ctx.save();
+    ctx.shadowColor = r.color;
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = `rgba(${cr},${cg},${cb},${alpha * 0.4})`;
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+
+  // Draw ribbons
+  ribbons.forEach((r, i) => {
+    const isHovered = hoveredIdx === i;
+    const isSameCat = hoveredIdx !== null && ribbons[hoveredIdx].ci === r.ci;
+    let alpha;
+    if (hoveredIdx === null) {
+      alpha = 0.35;
+    } else if (isHovered) {
+      alpha = 0.85;
+    } else if (isSameCat) {
+      alpha = 0.50;
+    } else {
+      alpha = 0.07;
+    }
+    drawRibbon(r, alpha, isHovered);
+  });
+
+  // Draw node bars
+  const barW = 4;
+
+  // Left nodes (categories)
+  if (layout.catNodes) {
+    layout.catNodes.forEach((n, i) => {
+      ctx.fillStyle = cats[i].color;
+      ctx.beginPath();
+      ctx.roundRect(PAD.left - barW, n.y, barW, n.h, 2);
+      ctx.fill();
+    });
+  }
+
+  // Right nodes (regions)
+  if (layout.regNodes) {
+    layout.regNodes.forEach((n, i) => {
+      ctx.fillStyle = "#555";
+      ctx.beginPath();
+      ctx.roundRect(W - PAD.right, n.y, barW, n.h, 2);
+      ctx.fill();
+    });
+  }
+
+  // Labels
+  ctx.font = "12px 'Helvetica Neue', Arial, sans-serif";
+  ctx.textBaseline = "middle";
+
+  if (layout.catNodes) {
+    ctx.textAlign = "right";
+    layout.catNodes.forEach((n, i) => {
+      const isActive = hoveredIdx !== null && ribbons[hoveredIdx].ci === i;
+      ctx.fillStyle = isActive ? "#fff" : "#888";
+      ctx.fillText(cats[i].name, PAD.left - 12, n.centerY);
+    });
+  }
+
+  if (layout.regNodes) {
+    ctx.textAlign = "left";
+    layout.regNodes.forEach((n, i) => {
+      const isActive = hoveredIdx !== null && ribbons[hoveredIdx].ri === i;
+      ctx.fillStyle = isActive ? "#fff" : "#888";
+      ctx.fillText(regions[i], W - PAD.right + 12, n.centerY);
+    });
+  }
+
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+// ───── AUDIO ENGINE ─────────────────────────────────────────
+// Warm, textural, Eno/Moog-inspired. Slow. Not a synth — an instrument.
+let audioCtx = null;
+let masterGain = null;
+let convolver = null;
+let audioReady = false;
+
+// Moog-like voices: multiple slightly detuned oscillators create
+// that thick, warm, chorused organ tone. Low filter cutoffs keep
+// everything round and soft. Long attacks so nothing is percussive.
+// Think Music for Airports, not Ableton.
+const VOICES = [
+  // AI — warm high organ, like a distant church tone
+  { base: 261.6, detuneCents: [0, -8, 7, -3],  filterHz: 900,  resonance: 0.8, attack: 1.2, sustain: 2.0, release: 4.0, lfoRate: 0.3, lfoDepth: 4 },
+  // Climate — deep sub-bass hum, oceanic
+  { base: 82.4,  detuneCents: [0, -6, 5, -12],  filterHz: 400,  resonance: 1.2, attack: 1.8, sustain: 2.5, release: 5.0, lfoRate: 0.15, lfoDepth: 2 },
+  // Digital Organics — mid-range warmth
+  { base: 196.0, detuneCents: [0, -10, 6, 3],   filterHz: 700,  resonance: 0.6, attack: 1.0, sustain: 2.0, release: 4.5, lfoRate: 0.4, lfoDepth: 5 },
+  // Education — mellow fifth, like a Radiohead organ sustain
+  { base: 220.0, detuneCents: [0, -5, 8, -7],   filterHz: 800,  resonance: 0.9, attack: 1.4, sustain: 2.2, release: 4.0, lfoRate: 0.25, lfoDepth: 3 },
+  // Longevity — low pad, breathing slowly
+  { base: 130.8, detuneCents: [0, -12, 4, -8],  filterHz: 500,  resonance: 1.0, attack: 2.0, sustain: 3.0, release: 5.5, lfoRate: 0.12, lfoDepth: 3 },
+  // Older Athletes — hollow midrange, woody
+  { base: 146.8, detuneCents: [0, -7, 10, -4],  filterHz: 600,  resonance: 1.4, attack: 1.5, sustain: 2.0, release: 4.0, lfoRate: 0.2, lfoDepth: 4 },
+  // Post Human — darker texture, filtered low
+  { base: 110.0, detuneCents: [0, -15, 6, -10], filterHz: 450,  resonance: 1.8, attack: 1.6, sustain: 2.5, release: 5.0, lfoRate: 0.18, lfoDepth: 2 },
+  // Skincare — soft high breath
+  { base: 293.7, detuneCents: [0, -4, 6, -2],   filterHz: 1000, resonance: 0.5, attack: 1.3, sustain: 2.0, release: 4.5, lfoRate: 0.35, lfoDepth: 5 },
+  // Spaces — wide and open, like a room tone
+  { base: 164.8, detuneCents: [0, -9, 11, -6],  filterHz: 650,  resonance: 0.7, attack: 1.8, sustain: 2.8, release: 5.0, lfoRate: 0.1, lfoDepth: 3 },
+  // Super Human — slightly brighter organ layer
+  { base: 247.0, detuneCents: [0, -6, 8, -5],   filterHz: 850,  resonance: 0.6, attack: 1.1, sustain: 2.0, release: 4.0, lfoRate: 0.28, lfoDepth: 4 },
+  // Women — warm root, rich in low-mids
+  { base: 174.6, detuneCents: [0, -8, 5, -11],  filterHz: 750,  resonance: 1.0, attack: 1.4, sustain: 2.2, release: 4.5, lfoRate: 0.22, lfoDepth: 3 }
+];
+
+function createReverb() {
+  // Long, diffuse hall reverb — like recording in a cathedral
+  const len = audioCtx.sampleRate * 6;
+  const buf = audioCtx.createBuffer(2, len, audioCtx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const data = buf.getChannelData(ch);
+    for (let i = 0; i < len; i++) {
+      // Exponential decay with some early reflection character
+      const t = i / len;
+      const decay = Math.pow(1 - t, 1.8);
+      // Diffuse random with slight stereo offset
+      data[i] = (Math.random() * 2 - 1) * decay * 0.6;
+    }
+  }
+  convolver = audioCtx.createConvolver();
+  convolver.buffer = buf;
+
+  const reverbGain = audioCtx.createGain();
+  reverbGain.gain.value = 0.55; // heavy reverb — Eno-level wet
+  convolver.connect(reverbGain);
+  reverbGain.connect(masterGain);
+}
+
+function initAudio() {
+  if (audioReady) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = 0.35; // gentle overall volume
+  masterGain.connect(audioCtx.destination);
+  createReverb();
+  audioReady = true;
+  document.getElementById("dot").classList.add("on");
+  document.getElementById("start-overlay").classList.add("hidden");
+}
+
+// Active voice tracking — so overlapping notes blend, not stack
+const activeVoiceCount = new Map();
+const MAX_CONCURRENT = 6; // limit total active voices
+
+function playVoice(catIdx, flowVal) {
+  if (!audioReady) return;
+
+  // Count active voices globally
+  let totalActive = 0;
+  activeVoiceCount.forEach(v => totalActive += v);
+  if (totalActive >= MAX_CONCURRENT) return; // let current ones breathe
+
+  const v = VOICES[catIdx];
+  const now = audioCtx.currentTime;
+  const totalDuration = v.attack + v.sustain + v.release;
+
+  // Very gentle volume — these should feel like they emerge, not hit
+  const vol = 0.03 + (flowVal / 40) * 0.05;
+
+  // Track this voice
+  const count = activeVoiceCount.get(catIdx) || 0;
+  activeVoiceCount.set(catIdx, count + 1);
+  setTimeout(() => {
+    activeVoiceCount.set(catIdx, Math.max(0, (activeVoiceCount.get(catIdx) || 1) - 1));
+  }, totalDuration * 1000);
+
+  // ── FILTER with slow LFO (Moog-style filter sweep) ──
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.value = v.filterHz;
+  filter.Q.value = v.resonance;
+
+  // LFO modulates filter cutoff slowly
+  const lfo = audioCtx.createOscillator();
+  const lfoGain = audioCtx.createGain();
+  lfo.type = "sine";
+  lfo.frequency.value = v.lfoRate;
+  lfoGain.gain.value = v.lfoDepth * 30; // subtle Hz modulation on filter
+  lfo.connect(lfoGain);
+  lfoGain.connect(filter.frequency);
+  lfo.start(now);
+  lfo.stop(now + totalDuration + 0.5);
+
+  // ── AMPLITUDE ENVELOPE — slow in, hold, slow out ──
+  const env = audioCtx.createGain();
+  env.gain.setValueAtTime(0, now);
+  env.gain.linearRampToValueAtTime(vol, now + v.attack);
+  env.gain.setValueAtTime(vol, now + v.attack + v.sustain);
+  env.gain.exponentialRampToValueAtTime(0.0001, now + totalDuration);
+
+  // ── 4 DETUNED OSCILLATORS — the Moog/organ thickness ──
+  // All sine waves, slightly detuned from each other.
+  // This is what gives it that warm, chorused, analog character.
+  v.detuneCents.forEach((cents, i) => {
+    const osc = audioCtx.createOscillator();
+    osc.type = "sine"; // always sine — warmth comes from layering, not waveform
+    osc.frequency.value = v.base;
+    osc.detune.value = cents + (Math.random() - 0.5) * 4; // tiny additional drift
+
+    // Each oscillator at slightly different level for richness
+    const oscGain = audioCtx.createGain();
+    oscGain.gain.value = i === 0 ? 1.0 : 0.6 + Math.random() * 0.2;
+
+    osc.connect(oscGain);
+    oscGain.connect(filter);
+
+    osc.start(now);
+    osc.stop(now + totalDuration + 0.5);
+  });
+
+  // ── Also add a sub-octave for body ──
+  const sub = audioCtx.createOscillator();
+  sub.type = "sine";
+  sub.frequency.value = v.base * 0.5;
+  const subGain = audioCtx.createGain();
+  subGain.gain.value = 0.3;
+  sub.connect(subGain);
+  subGain.connect(filter);
+  sub.start(now);
+  sub.stop(now + totalDuration + 0.5);
+
+  // ── Connect: filter → envelope → dry + reverb ──
+  filter.connect(env);
+  env.connect(masterGain);   // dry path
+  env.connect(convolver);     // wet reverb path
+}
+
+// ───── MOUSE INTERACTION ────────────────────────────────────
+// Deliberately slow. You're not playing a synth — you're drawing
+// your hand across organ pipes in a dark cathedral.
+const tooltip = document.getElementById("tooltip");
+let lastPlayed = -1;
+let lastPlayTime = 0;
+const COOLDOWN = 350; // ms — slow and deliberate, not frantic
+let lastCat = -1;
+let lastCatTime = 0;
+const CAT_COOLDOWN = 800; // don't retrigger the same category too fast
+
+canvas.addEventListener("mousemove", (e) => {
+  const mx = e.clientX, my = e.clientY;
+  const idx = hitTest(mx, my);
+  hoveredIdx = idx;
+
+  if (idx !== null) {
+    const r = ribbons[idx];
+    const now = Date.now();
+
+    // Only trigger if:
+    // 1. It's a genuinely different ribbon AND enough time has passed
+    // 2. Or same category but enough cooldown has elapsed
+    const isDiffRibbon = idx !== lastPlayed;
+    const isDiffCat = r.ci !== lastCat;
+    const enoughTime = now - lastPlayTime > COOLDOWN;
+    const enoughCatTime = now - lastCatTime > CAT_COOLDOWN;
+
+    if (isDiffRibbon && enoughTime && (isDiffCat || enoughCatTime)) {
+      playVoice(r.ci, r.val);
+      lastPlayed = idx;
+      lastPlayTime = now;
+      if (isDiffCat) {
+        lastCat = r.ci;
+        lastCatTime = now;
+      }
+    }
+
+    // Tooltip
+    tooltip.querySelector(".cat").textContent = r.catName;
+    tooltip.querySelector(".cat").style.color = r.color;
+    tooltip.querySelector(".detail").textContent = `→ ${r.regName}  ·  ${r.val}`;
+    tooltip.style.left = (mx + 18) + "px";
+    tooltip.style.top = (my - 8) + "px";
+    tooltip.classList.add("visible");
+  } else {
+    tooltip.classList.remove("visible");
+    lastPlayed = -1;
+  }
+});
+
+canvas.addEventListener("mouseleave", () => {
+  hoveredIdx = null;
+  tooltip.classList.remove("visible");
+  lastPlayed = -1;
+});
+
+// ───── START ────────────────────────────────────────────────
+document.getElementById("start-overlay").addEventListener("click", initAudio);
+</script>
+</body>
+</html>
